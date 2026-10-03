@@ -63,6 +63,32 @@ func SetOIDCIdentity(userID uint64, issuer, subject string) error {
 	return tx.Commit()
 }
 
+// BindOIDCIdentity links an unlinked user during automatic provisioning or
+// legacy migration. Unlike the admin relink operation, it never replaces an
+// existing identity, and the uniqueness constraints make concurrent binds safe.
+func BindOIDCIdentity(userID uint64, issuer, subject string) error {
+	tx, err := sqlDb.DB().Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var existingIssuer, existingSubject string
+	err = tx.QueryRow("SELECT issuer, subject FROM oidc_identities WHERE user_id = ?", fmt.Sprint(userID)).Scan(&existingIssuer, &existingSubject)
+	if err == nil {
+		if existingIssuer == issuer && existingSubject == subject {
+			return nil
+		}
+		return fmt.Errorf("user already has a different OIDC identity")
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO oidc_identities (issuer, subject, user_id) VALUES (?, ?, ?)", issuer, subject, fmt.Sprint(userID)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func DeleteOIDCIdentity(userID uint64) error {
 	_, err := sqlDb.DB().Exec("DELETE FROM oidc_identities WHERE user_id = ?", fmt.Sprint(userID))
 	return err

@@ -95,6 +95,13 @@ func TestOIDCIdentityLinksAreUniqueAndReplaceAtomically(t *testing.T) {
 	if err != nil || identity.Subject != "subject-2" {
 		t.Fatalf("unexpected replacement: %#v, %v", identity, err)
 	}
+	if err := BindOIDCIdentity(alice.ID, "https://issuer.example", "attacker-subject"); err == nil {
+		t.Fatal("automatic binding must not replace an existing account identity")
+	}
+	identity, err = GetOIDCIdentity(alice.ID, "https://issuer.example")
+	if err != nil || identity.Subject != "subject-2" {
+		t.Fatalf("failed automatic bind changed the identity: %#v, %v", identity, err)
+	}
 }
 
 func TestUpdateUserPatchPreservesTOTPSecret(t *testing.T) {

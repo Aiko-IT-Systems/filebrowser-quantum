@@ -10,8 +10,8 @@ import (
 	"github.com/gtsteffaniak/filebrowser/backend/internal/app"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/auth"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/users"
-	"github.com/gtsteffaniak/filebrowser/backend/internal/state"
 	fberrors "github.com/gtsteffaniak/filebrowser/backend/internal/errors"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/state"
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 )
 
@@ -28,7 +28,7 @@ func TestGetOrCreateAuthenticatedUserRejectsLoginMethodMismatch(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	_, err := getOrCreateAuthenticatedUser("graham", users.LoginMethodOidc, false, nil, false)
+	_, err := getOrCreateAuthenticatedUser("graham", users.LoginMethodOidc, true, []string{"admins"}, true)
 	if !errors.Is(err, fberrors.ErrWrongLoginMethod) {
 		t.Fatalf("getOrCreateAuthenticatedUser() err = %v, want ErrWrongLoginMethod", err)
 	}
@@ -39,6 +39,9 @@ func TestGetOrCreateAuthenticatedUserRejectsLoginMethodMismatch(t *testing.T) {
 	}
 	if loaded.LoginMethod != users.LoginMethodPassword {
 		t.Fatalf("loginMethod changed to %q, want password", loaded.LoginMethod)
+	}
+	if loaded.Permissions.Admin {
+		t.Fatal("mismatched OIDC login must not apply the IdP admin claim")
 	}
 }
 

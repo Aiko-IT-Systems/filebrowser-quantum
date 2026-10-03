@@ -492,7 +492,7 @@ func loginWithOidcIdentity(w http.ResponseWriter, r *http.Request, issuer, subje
 	} else {
 		user, err = getOrCreateAuthenticatedUser(username, users.LoginMethodOidc, isAdmin, groups, true)
 		if err == nil && subject != "" {
-			if linkErr := state.SetOIDCIdentity(user.ID, issuer, subject); linkErr != nil {
+			if linkErr := state.BindOIDCIdentity(user.ID, issuer, subject); linkErr != nil {
 				return http.StatusConflict, fmt.Errorf("could not link OIDC identity to account")
 			}
 		}
