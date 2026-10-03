@@ -1244,6 +1244,7 @@ export default {
                 username: this.user.username,
                 password: this.user.password,
                 passwordRef: this.passwordRef,
+                loginMethod: this.user.loginMethod,
               }
             : null;
           this.applySessionState(session);
@@ -1254,6 +1255,9 @@ export default {
             }
             if (newUserCredentials.passwordRef) {
               this.passwordRef = newUserCredentials.passwordRef;
+            }
+            if (newUserCredentials.loginMethod) {
+              this.user.loginMethod = newUserCredentials.loginMethod;
             }
           }
         }
