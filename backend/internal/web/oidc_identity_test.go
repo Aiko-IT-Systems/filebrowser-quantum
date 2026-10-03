@@ -22,6 +22,7 @@ func TestOIDCLinkedSubjectUsesAdminChosenUsername(t *testing.T) {
 	}
 	oldIssuer := settings.Config.Auth.Methods.OidcAuth.IssuerUrl
 	oldAutoCreate := settings.Config.Auth.Methods.OidcAuth.AutoCreateUsers
+	oldTokenExpiration := settings.Config.Auth.TokenExpirationHours
 	settings.Config.Auth.Methods.OidcAuth.IssuerUrl = issuer
 	disabled := false
 	settings.Config.Auth.Methods.OidcAuth.AutoCreateUsers = &disabled
@@ -29,6 +30,7 @@ func TestOIDCLinkedSubjectUsesAdminChosenUsername(t *testing.T) {
 	t.Cleanup(func() {
 		settings.Config.Auth.Methods.OidcAuth.IssuerUrl = oldIssuer
 		settings.Config.Auth.Methods.OidcAuth.AutoCreateUsers = oldAutoCreate
+		settings.Config.Auth.TokenExpirationHours = oldTokenExpiration
 	})
 	req := httptest.NewRequest("GET", "/api/auth/oidc/callback", nil)
 	rec := httptest.NewRecorder()
