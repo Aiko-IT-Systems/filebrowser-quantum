@@ -381,6 +381,17 @@ func printToken(w http.ResponseWriter, r *http.Request, user *users.User, priorT
 
 	expiresTime := time.Now().Add(expires).Add(time.Minute * 30)
 
+	// Authentication middleware may have echoed the incoming session cookie.
+	// A renewal replaces that token, so only send the replacement cookie. Some
+	// clients keep the first of two same-name Set-Cookie values and otherwise
+	// continue using the retired token until its grace period ends.
+	setCookies := w.Header().Values("Set-Cookie")
+	w.Header().Del("Set-Cookie")
+	for _, cookie := range setCookies {
+		if !strings.HasPrefix(cookie, sessionCookieName+"=") {
+			w.Header().Add("Set-Cookie", cookie)
+		}
+	}
 	SetSessionCookie(w, r, tokenString, expiresTime)
 
 	// Still return token in body for backward compatibility and state management

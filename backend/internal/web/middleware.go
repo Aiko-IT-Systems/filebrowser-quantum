@@ -526,9 +526,13 @@ func withUserHelper(fn handleFunc) handleFunc {
 		}
 		data.User = userValue
 
-		// Set cookie. Some clients like gvfs relies on it for concurrent uploads
+		// Bearer and query-token clients may need a session cookie, but a request
+		// already using that cookie must not echo it into the response. Otherwise
+		// a delayed response can restore a token retired by a newer renewal.
 		if tk.RegisteredClaims.ExpiresAt != nil {
-			SetSessionCookie(w, r, data.Token, tk.RegisteredClaims.ExpiresAt.Time)
+			if cookie, err := r.Cookie(sessionCookieName); err != nil || cookie.Value != data.Token {
+				SetSessionCookie(w, r, data.Token, tk.RegisteredClaims.ExpiresAt.Time)
+			}
 		}
 		SetUserInResponseWriter(w, data.User)
 		if data.User.Username == "" {
