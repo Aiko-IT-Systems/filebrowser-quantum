@@ -154,13 +154,18 @@ func ValidateRecaptcha() {
 
 // OpenID OAuth2.0
 type OidcConfig struct {
-	AuthCommon   `json:",inline"`
-	ClientID     string                `json:"clientId"`     // secret: client id of the OIDC application
-	ClientSecret string                `json:"clientSecret"` // secret: client secret of the OIDC application
-	IssuerUrl    string                `json:"issuerUrl"`    // authorization URL of the OIDC provider
-	Scopes       string                `json:"scopes"`       // scopes to request from the OIDC provider
-	Provider     *oidc.Provider        `json:"-"`            // OIDC provider
-	Verifier     *oidc.IDTokenVerifier `json:"-"`            // OIDC verifier
+	AuthCommon      `json:",inline"`
+	AutoCreateUsers *bool                 `json:"autoCreateUsers"` // Defaults to true for backwards compatibility.
+	ClientID        string                `json:"clientId"`        // secret: client id of the OIDC application
+	ClientSecret    string                `json:"clientSecret"`    // secret: client secret of the OIDC application
+	IssuerUrl       string                `json:"issuerUrl"`       // authorization URL of the OIDC provider
+	Scopes          string                `json:"scopes"`          // scopes to request from the OIDC provider
+	Provider        *oidc.Provider        `json:"-"`               // OIDC provider
+	Verifier        *oidc.IDTokenVerifier `json:"-"`               // OIDC verifier
+}
+
+func (c OidcConfig) ShouldAutoCreateUsers() bool {
+	return c.AutoCreateUsers == nil || *c.AutoCreateUsers
 }
 
 type LdapConfig struct {

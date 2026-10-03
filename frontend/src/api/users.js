@@ -30,6 +30,19 @@ export async function get(username, options = {}) {
   }
 }
 
+export async function getOIDCIdentity(username) {
+  return fetchJSON(getApiPath('users/oidc-identity', { username }))
+}
+
+export async function setOIDCIdentity(username, subject) {
+  const apiPath = getApiPath('users/oidc-identity', { username })
+  if (!subject) {
+    await fetchURL(apiPath, { method: 'DELETE' })
+    return
+  }
+  await fetchURL(apiPath, { method: 'PUT', body: JSON.stringify({ subject }) })
+}
+
 // POST /api/users (create user)
 // Password-login: tries without X-Password first; on 401 requiring X-Password, opens the prompt and retries.
 // options.skipActorPasswordConfirm / pre-set X-Password skip that flow.

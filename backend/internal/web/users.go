@@ -30,6 +30,62 @@ type UserRequest struct {
 	User  users.User `json:"data"`
 }
 
+type oidcIdentityRequest struct {
+	Subject string `json:"subject"`
+}
+
+func userOIDCIdentityHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, error) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		return http.StatusBadRequest, fmt.Errorf("username is required")
+	}
+	user, err := state.GetUserByUsername(username)
+	if err != nil {
+		if err == errors.ErrNotExist {
+			return http.StatusNotFound, err
+		}
+		return http.StatusInternalServerError, err
+	}
+	if user.LoginMethod != users.LoginMethodOidc {
+		return http.StatusConflict, fmt.Errorf("account login method must be OIDC")
+	}
+	issuer := settings.Config.Auth.Methods.OidcAuth.IssuerUrl
+	if issuer == "" {
+		return http.StatusConflict, fmt.Errorf("configure the OIDC issuer before linking identities")
+	}
+	switch r.Method {
+	case http.MethodGet:
+		identity, err := state.GetOIDCIdentity(user.ID, issuer)
+		if err == errors.ErrNotExist {
+			return RenderJSON(w, r, map[string]string{"issuer": issuer, "subject": ""})
+		}
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		return RenderJSON(w, r, identity)
+	case http.MethodPut:
+		var body oidcIdentityRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+			return http.StatusBadRequest, err
+		}
+		body.Subject = strings.TrimSpace(body.Subject)
+		if body.Subject == "" || len(body.Subject) > 1024 {
+			return http.StatusBadRequest, fmt.Errorf("subject must contain 1 to 1024 characters")
+		}
+		if err := state.SetOIDCIdentity(user.ID, issuer, body.Subject); err != nil {
+			return http.StatusConflict, fmt.Errorf("OIDC identity is already linked or could not be saved")
+		}
+		return RenderJSON(w, r, map[string]string{"issuer": issuer, "subject": body.Subject})
+	case http.MethodDelete:
+		if err := state.DeleteOIDCIdentity(user.ID); err != nil {
+			return http.StatusInternalServerError, err
+		}
+		return http.StatusNoContent, nil
+	default:
+		return http.StatusMethodNotAllowed, nil
+	}
+}
+
 // userGetHandler lists users or returns one user by username. Numeric user IDs are not accepted.
 // @Summary List users or get one by username
 // @Description Returns all users (admins) or only the current user; with ?username=self, the logged-in user; with ?username=login, that user if permitted. Query id= is not supported.

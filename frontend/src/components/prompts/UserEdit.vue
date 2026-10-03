@@ -163,6 +163,11 @@
           @update:model-value="emitUpdate"
         />
       </div>
+      <div v-if="stateUser.permissions.admin && user.loginMethod === 'oidc'">
+        <label for="oidcSubject">OIDC subject (stable provider ID)</label>
+        <input class="input" id="oidcSubject" type="text" autocomplete="off" v-model.trim="oidcSubject" placeholder="Provider sub claim" />
+        <p class="group-note">The FileBrowser username stays admin-managed. OIDC login must be enabled and an issuer configured before users can sign in.</p>
+      </div>
 
       <div v-if="stateUser.permissions.admin && loaded" class="settings-items user-edit-hub">
         <SettingsButton
@@ -353,6 +358,8 @@ export default {
         otpEnabled: false,
         loginMethod: null, // Will be set based on available methods
       },
+      oidcSubject: "",
+      oidcSubjectOriginal: "",
       showDelete: false,
       createUserDir: false,
       loaded: false,
@@ -494,9 +501,8 @@ export default {
       if (this.globalVars.passwordAvailable) {
         options.push({ value: "password", label: this.$t("settings.loginMethods.password") });
       }
-      if (this.globalVars.oidcAvailable) {
-        options.push({ value: "oidc", label: "OIDC" });
-      }
+      // Admins can provision links while provider login is disabled.
+      options.push({ value: "oidc", label: "OIDC" });
       if (this.globalVars.proxyAvailable) {
         options.push({ value: "proxy", label: "Proxy" });
       }
@@ -526,10 +532,9 @@ export default {
     },
     firstAvailableLoginMethod() {
       if (this.globalVars.passwordAvailable) return "password";
-      if (this.globalVars.oidcAvailable) return "oidc";
       if (this.globalVars.proxyAvailable) return "proxy";
       if (this.globalVars.ldapAvailable) return "ldap";
-      return "password"; // fallback
+      return "oidc";
     },
     profileSections: {
       get() {
@@ -833,7 +838,7 @@ export default {
           // Ensure loginMethod is valid, set to first available method if not set or invalid
           const validMethods = [];
           if (this.globalVars.passwordAvailable) validMethods.push("password");
-          if (this.globalVars.oidcAvailable) validMethods.push("oidc");
+          validMethods.push("oidc");
           if (this.globalVars.proxyAvailable) validMethods.push("proxy");
           if (this.globalVars.ldapAvailable) validMethods.push("ldap");
           if (this.globalVars.jwtAvailable) validMethods.push("jwt");
@@ -848,6 +853,13 @@ export default {
             return;
           }
           this.user = this.normalizeFormUser(await this.fetchExistingUserRecord(uname));
+          if (this.user.loginMethod === "oidc") {
+            try {
+              this.oidcSubject = (await usersApi.getOIDCIdentity(uname))?.subject || "";
+              this.oidcSubjectOriginal = this.oidcSubject;
+            }
+            catch (e) { this.error = e; }
+          }
           this.user.password = "";
           // Normalize scopes to ensure they're in {name, scope} format only
           if (this.user.scopes && Array.isArray(this.user.scopes)) {
@@ -856,7 +868,7 @@ export default {
           // Ensure loginMethod is valid, set to first available method if not set or invalid
           const validMethods = [];
           if (this.globalVars.passwordAvailable) validMethods.push("password");
-          if (this.globalVars.oidcAvailable) validMethods.push("oidc");
+          validMethods.push("oidc");
           if (this.globalVars.proxyAvailable) validMethods.push("proxy");
           if (this.globalVars.ldapAvailable) validMethods.push("ldap");
           if (this.globalVars.jwtAvailable) validMethods.push("jwt");
@@ -1274,6 +1286,7 @@ export default {
             );
             this.createdUser = true;
           }
+          if (payload.loginMethod === "oidc" && this.oidcSubject) await usersApi.setOIDCIdentity(payload.username, this.oidcSubject);
           await this.saveGroups(payload.username);
           // Emit event to refresh user list
           eventBus.emit('usersChanged');
@@ -1283,12 +1296,16 @@ export default {
           const fields = this.computeChangedFields();
           if (fields.length === 0) {
             // Group membership is saved separately from the user fields.
+            if (this.user.loginMethod === "oidc" && this.oidcSubject !== this.oidcSubjectOriginal) {
+              await usersApi.setOIDCIdentity(this.user.username, this.oidcSubject);
+            }
             await this.saveGroups(payload.username);
             eventBus.emit('usersChanged');
             mutations.closeTopPrompt();
             return;
           }
           await usersApi.update(payload, fields);
+          if (payload.loginMethod === "oidc" && this.oidcSubject !== this.oidcSubjectOriginal) await usersApi.setOIDCIdentity(payload.username, this.oidcSubject);
           await this.saveGroups(payload.username);
           if (payload.username === state.user.username) {
             await validateLogin();

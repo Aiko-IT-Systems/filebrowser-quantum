@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/users"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/errors"
+	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 )
 
 func TestCreateUserValidateUsername(t *testing.T) {
@@ -52,6 +53,47 @@ func TestCreateUserValidateUsername(t *testing.T) {
 				t.Fatalf("CreateUser(%q): got %v, want error containing %q", tc.username, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestOIDCIdentityLinksAreUniqueAndReplaceAtomically(t *testing.T) {
+	t.Setenv("FILEBROWSER_ONLYOFFICE_SECRET", "")
+	settings.Initialize("../../../_docker/src/noauth/backend/config.yaml")
+	settings.Env.IsPlaywright = true
+	dbPath := filepath.Join(t.TempDir(), "oidc-identities.sqlite")
+	if _, err := Initialize(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = Close() })
+
+	createOIDCUser := func(username string) users.User {
+		u := users.User{FrontendUser: users.FrontendUser{Username: username, LoginMethod: users.LoginMethodOidc}}
+		if err := CreateUser(&u, ""); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	alice := createOIDCUser("oidc-alice")
+	bob := createOIDCUser("oidc-bob")
+	if err := SetOIDCIdentity(alice.ID, "https://issuer.example", "subject-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetOIDCIdentity(bob.ID, "https://issuer.example", "subject-1"); err == nil {
+		t.Fatal("expected duplicate subject to be rejected")
+	}
+	id, err := GetUserIDByOIDCIdentity("https://issuer.example", "subject-1")
+	if err != nil || id != alice.ID {
+		t.Fatalf("original link not preserved after conflict: id=%d err=%v", id, err)
+	}
+	if err := SetOIDCIdentity(alice.ID, "https://issuer.example", "subject-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetUserIDByOIDCIdentity("https://issuer.example", "subject-1"); err != errors.ErrNotExist {
+		t.Fatalf("old subject still linked: %v", err)
+	}
+	identity, err := GetOIDCIdentity(alice.ID, "https://issuer.example")
+	if err != nil || identity.Subject != "subject-2" {
+		t.Fatalf("unexpected replacement: %#v, %v", identity, err)
 	}
 }
 
@@ -259,7 +301,7 @@ func TestUpdateUserClearsTOTPWhenOtpDisabled(t *testing.T) {
 
 	u := &users.User{
 		FrontendUser: users.FrontendUser{
-			Username: "alice",
+			Username:   "alice",
 			OtpEnabled: true,
 		},
 	}
@@ -310,11 +352,11 @@ func TestUpdateUserPatchPreservesBackendSourcePermissions(t *testing.T) {
 	scopePerms := users.SourceFilePermissions{View: true, Download: true, Modify: true}
 	u := &users.User{
 		FrontendUser: users.FrontendUser{
-			Username: "alice",
+			Username:    "alice",
 			Permissions: users.Permissions{Admin: true},
 		},
 		BackendScopes: []users.BackendScope{{Path: "/data/a", Scope: "/", Permissions: scopePerms}},
-		Version:     users.SourcePermissionsMigrationVersion,
+		Version:       users.SourcePermissionsMigrationVersion,
 	}
 	if err = CreateUser(u, "password"); err != nil {
 		t.Fatal(err)
@@ -340,4 +382,3 @@ func TestUpdateUserPatchPreservesBackendSourcePermissions(t *testing.T) {
 		t.Fatalf("expected perms preserved after patch, got %#v", reloaded.BackendScopes)
 	}
 }
-

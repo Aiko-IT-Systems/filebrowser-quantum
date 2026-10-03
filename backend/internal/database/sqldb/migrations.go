@@ -6,7 +6,7 @@ import (
 )
 
 // currentSchemaVersion is the SQLite schema marker for this codebase.
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // Schema creates all tables for the SQLite database
 func createSchema(db *sql.DB) error {
@@ -28,6 +28,15 @@ func createSchema(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_users_admin ON users(perm_admin);
 	CREATE INDEX IF NOT EXISTS idx_users_api ON users(perm_api);
+
+	-- OIDC subjects are unique within an issuer and accounts have one link in this single-issuer flow.
+	CREATE TABLE IF NOT EXISTS oidc_identities (
+		issuer TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		user_id TEXT NOT NULL UNIQUE,
+		PRIMARY KEY (issuer, subject),
+		FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+	);
 
 	-- Shares (owner is user_id)
 	CREATE TABLE IF NOT EXISTS shares (
@@ -220,6 +229,8 @@ func runMigrations(db *sql.DB, fromVersion int) error {
 			if err := addHashedTokenExpiryColumn(db); err != nil {
 				return err
 			}
+		case 5:
+			// Identity table is created by createSchema for both fresh and upgraded databases.
 		default:
 			return fmt.Errorf("unknown schema version: %d", v)
 		}

@@ -13,6 +13,8 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/activity"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/users"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/errors"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/state"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 	"github.com/gtsteffaniak/go-logger/logger"
@@ -22,8 +24,14 @@ import (
 const (
 	oidcStateCookieName    = "filebrowser_oidc_state"
 	oidcRedirectCookieName = "filebrowser_oidc_redirect"
+	oidcVerifierCookieName = "filebrowser_oidc_verifier"
+	oidcNonceCookieName    = "filebrowser_oidc_nonce"
 	oidcFlowCookieMaxAge   = 600 // seconds
 )
+
+func oidcAuthorizationURL(config *oauth2.Config, state, nonce, verifier string) string {
+	return config.AuthCodeURL(state, oauth2.SetAuthURLParam("nonce", nonce), oauth2.S256ChallengeOption(verifier))
+}
 
 func oidcFlowCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
@@ -41,6 +49,8 @@ func oidcFlowCookie(r *http.Request, name, value string, maxAge int) *http.Cooki
 func clearOidcFlowCookies(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, oidcFlowCookie(r, oidcStateCookieName, "", -1))
 	http.SetCookie(w, oidcFlowCookie(r, oidcRedirectCookieName, "", -1))
+	http.SetCookie(w, oidcFlowCookie(r, oidcVerifierCookieName, "", -1))
+	http.SetCookie(w, oidcFlowCookie(r, oidcNonceCookieName, "", -1))
 }
 
 // validateOidcCallbackState checks the OAuth state parameter against the HttpOnly cookie set at login.
@@ -225,6 +235,14 @@ func oidcLoginHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, 
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("generate OIDC state: %w", err)
 	}
+	verifier, err := utils.RandomHex(32)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("generate OIDC PKCE verifier: %w", err)
+	}
+	nonce, err := utils.RandomHex(32)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("generate OIDC nonce: %w", err)
+	}
 
 	postLogin := settings.Config.Http.BaseURL
 	if rawRedirect := r.URL.Query().Get("redirect"); rawRedirect != "" {
@@ -237,8 +255,10 @@ func oidcLoginHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, 
 
 	http.SetCookie(w, oidcFlowCookie(r, oidcStateCookieName, state, oidcFlowCookieMaxAge))
 	http.SetCookie(w, oidcFlowCookie(r, oidcRedirectCookieName, postLogin, oidcFlowCookieMaxAge))
+	http.SetCookie(w, oidcFlowCookie(r, oidcVerifierCookieName, verifier, oidcFlowCookieMaxAge))
+	http.SetCookie(w, oidcFlowCookie(r, oidcNonceCookieName, nonce, oidcFlowCookieMaxAge))
 
-	authURL := oauth2Config.AuthCodeURL(state)
+	authURL := oidcAuthorizationURL(oauth2Config, state, nonce, verifier)
 	http.Redirect(w, r, authURL, http.StatusFound)
 	return 0, nil
 }
@@ -276,9 +296,14 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request, d *Context) (in
 		ctx = oidc.ClientContext(ctx, customClient)
 	}
 	code := r.URL.Query().Get("code")
+	verifierCookie, verifierErr := r.Cookie(oidcVerifierCookieName)
+	nonceCookie, nonceErr := r.Cookie(oidcNonceCookieName)
 	postLoginRedirect, status, stateErr := validateOidcCallbackState(r, w)
 	if stateErr != nil {
 		return status, stateErr
+	}
+	if verifierErr != nil || verifierCookie.Value == "" || nonceErr != nil || nonceCookie.Value == "" {
+		return http.StatusBadRequest, fmt.Errorf("missing OIDC verifier or nonce")
 	}
 
 	oauth2Config := &oauth2.Config{
@@ -290,19 +315,23 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request, d *Context) (in
 	}
 
 	// Exchange the authorization code for tokens
-	token, err := oauth2Config.Exchange(ctx, code)
+	token, err := oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(verifierCookie.Value))
 	if err != nil {
 		logger.Errorf("failed to exchange token: %v", err)
 		return http.StatusInternalServerError, fmt.Errorf("failed to exchange token: %v", err)
 	}
 
 	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok || rawIDToken == "" {
+		return http.StatusUnauthorized, fmt.Errorf("OIDC provider did not return an ID token")
+	}
 	// accessToken := token.AccessToken // Access token is needed for UserInfo, already in 'token'
 
 	var userdata userInfo            // Declare userdata here to be populated by either source
 	var idTokenClaims map[string]any // Verified ID-token claims preserved across UserInfo fallback
 	claimsFromIDToken := false       // Flag to track if we successfully got claims from ID token
 	loginUsername := ""              // Variable to hold the login username
+	identitySubject := ""
 
 	// Create custom unmarshaller for userInfo
 	userInfoUnmarshaller := &userInfoUnmarshaller{
@@ -316,10 +345,19 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request, d *Context) (in
 		// This uses the verifier initialized with the provider's JWKS endpoint and client ID
 		idToken, verify_err := oidcCfg.Verifier.Verify(ctx, rawIDToken)
 		if verify_err != nil {
-			// this might not be necessary for certain providers like authentik
-			logger.Debugf("failed to verify ID token: %v. This might be expected, falling back to UserInfo endpoint.", verify_err)
-			// Verification failed, claimsFromIDToken remains false
+			logger.Debugf("failed to verify ID token: %v", verify_err)
+			return http.StatusUnauthorized, fmt.Errorf("OIDC ID token verification failed")
 		} else {
+			if idToken.Nonce != nonceCookie.Value {
+				return http.StatusUnauthorized, fmt.Errorf("OIDC nonce mismatch")
+			}
+			if idToken.Issuer != oidcCfg.IssuerUrl {
+				return http.StatusUnauthorized, fmt.Errorf("OIDC issuer mismatch")
+			}
+			identitySubject = idToken.Subject
+			if identitySubject == "" {
+				return http.StatusUnauthorized, fmt.Errorf("OIDC subject is missing")
+			}
 			// Decode the ID token claims using custom unmarshaller
 			// This is where the JWE unmarshalling error occurs if the token is encrypted
 			if err := idToken.Claims(userInfoUnmarshaller); err != nil {
@@ -345,9 +383,6 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request, d *Context) (in
 			}
 		}
 
-	} else {
-		logger.Debug("No ID token found in token response or it was empty. Falling back to UserInfo endpoint.")
-		// claimsFromIDToken remains false
 	}
 
 	// --- Fallback to UserInfo endpoint if ID token processing did not provide essential claims ---
@@ -376,14 +411,14 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request, d *Context) (in
 			loginUsername = v
 		}
 	}
-	if loginUsername == "" {
+	if loginUsername == "" && identitySubject == "" {
 		logger.Errorf("No valid username found for identifier '%v' in claims.", oidcCfg.UserIdentifier)
-		return http.StatusInternalServerError, fmt.Errorf("no valid username found for identifier '%v'", oidcCfg.UserIdentifier)
+		return http.StatusUnauthorized, fmt.Errorf("OIDC subject or username claim is missing")
 	}
 
 	// Proceed to log the user in with the OIDC data
 	// userdata struct now contains info from either verified ID token or UserInfo endpoint
-	return loginWithOidcUser(w, r, loginUsername, userdata.Groups, postLoginRedirect)
+	return loginWithOidcIdentity(w, r, oidcCfg.IssuerUrl, identitySubject, loginUsername, userdata.Groups, postLoginRedirect)
 }
 
 // mergeMissingOidcClaims copies claims from from into userdata when absent after UserInfo fallback.
@@ -398,11 +433,30 @@ func mergeMissingOidcClaims(userdata *userInfo, from map[string]any) {
 	}
 }
 
-// loginWithOidcUser extracts the username from the user claims (userInfo)
-// based on the configured UserIdentifier and logs the user into the application.
-// It creates a new user if one doesn't exist.
-func loginWithOidcUser(w http.ResponseWriter, r *http.Request, username string, groups []string, postLoginRedirect string) (int, error) {
+// loginWithOidcIdentity resolves the verified issuer+subject to an account. The
+// username claim is used only for backwards-compatible first-login provisioning.
+func loginWithOidcIdentity(w http.ResponseWriter, r *http.Request, issuer, subject, username string, groups []string, postLoginRedirect string) (int, error) {
 	oidcCfg := settings.Config.Auth.Methods.OidcAuth
+	var linkedUser *users.User
+	if subject != "" {
+		userID, err := state.GetUserIDByOIDCIdentity(issuer, subject)
+		if err == nil {
+			u, getErr := state.GetUserByID(userID)
+			if getErr != nil {
+				return http.StatusUnauthorized, fmt.Errorf("linked OIDC account no longer exists")
+			}
+			linkedUser = &u
+		} else if err != errors.ErrNotExist {
+			return http.StatusInternalServerError, err
+		}
+	}
+	if linkedUser != nil {
+		username = linkedUser.Username
+	} else if !oidcCfg.ShouldAutoCreateUsers() {
+		return http.StatusUnauthorized, fmt.Errorf("OIDC identity is not linked to an account")
+	} else if username == "" {
+		return http.StatusUnauthorized, fmt.Errorf("OIDC username claim is empty")
+	}
 
 	// Check if user is in required groups (if userGroups is configured)
 	if len(oidcCfg.UserGroups) > 0 {
@@ -427,7 +481,22 @@ func loginWithOidcUser(w http.ResponseWriter, r *http.Request, username string, 
 
 	logger.Debugf("Successfully authenticated OIDC username: %s isAdmin: %v", username, isAdmin)
 
-	user, err := getOrCreateAuthenticatedUser(username, users.LoginMethodOidc, isAdmin, groups, true)
+	var user *users.User
+	var err error
+	if linkedUser != nil {
+		// Verify account method before any claim-driven permission changes.
+		if linkedUser.LoginMethod != users.LoginMethodOidc {
+			return http.StatusUnauthorized, errors.ErrWrongLoginMethod
+		}
+		user, err = getOrCreateAuthenticatedUser(username, users.LoginMethodOidc, isAdmin, groups, true)
+	} else {
+		user, err = getOrCreateAuthenticatedUser(username, users.LoginMethodOidc, isAdmin, groups, true)
+		if err == nil && subject != "" {
+			if linkErr := state.SetOIDCIdentity(user.ID, issuer, subject); linkErr != nil {
+				return http.StatusConflict, fmt.Errorf("could not link OIDC identity to account")
+			}
+		}
+	}
 	if err != nil {
 		if status, mapped := loginMethodHTTPStatus(err); status != 0 {
 			return status, mapped

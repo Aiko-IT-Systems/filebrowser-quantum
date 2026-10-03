@@ -1,10 +1,15 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"golang.org/x/oauth2"
 
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 )
@@ -42,6 +47,43 @@ func TestValidateOidcCallbackState(t *testing.T) {
 			t.Fatalf("expected 400, got status=%d err=%v", status, err)
 		}
 	})
+}
+
+func TestOIDCAuthorizationURLUsesS256PKCEAndNonce(t *testing.T) {
+	config := &oauth2.Config{ClientID: "client", RedirectURL: "https://app.example/callback", Endpoint: oauth2.Endpoint{AuthURL: "https://idp.example/authorize"}}
+	verifier, state, nonce := "the-verifier", "state-value", "nonce-value"
+	parsed, err := url.Parse(oidcAuthorizationURL(config, state, nonce, verifier))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := parsed.Query()
+	if q.Get("state") != state || q.Get("nonce") != nonce {
+		t.Fatalf("missing state or nonce in request: %v", q)
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	wantChallenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	if q.Get("code_challenge") != wantChallenge || q.Get("code_challenge_method") != "S256" {
+		t.Fatalf("PKCE challenge mismatch: got %q method %q", q.Get("code_challenge"), q.Get("code_challenge_method"))
+	}
+}
+
+func TestOIDCTokenExchangeSendsPKCEVerifier(t *testing.T) {
+	const verifier = "0123456789abcdef0123456789abcdef"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		if got := r.Form.Get("code_verifier"); got != verifier {
+			t.Errorf("code_verifier = %q, want matching verifier", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access","token_type":"Bearer"}`))
+	}))
+	defer server.Close()
+	config := &oauth2.Config{ClientID: "client", Endpoint: oauth2.Endpoint{TokenURL: server.URL}}
+	if _, err := config.Exchange(t.Context(), "authorization-code", oauth2.VerifierOption(verifier)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestParseSignupCredentialsJSON(t *testing.T) {
@@ -82,4 +124,3 @@ func TestParseSignupCredentialsJSONMixedCaseContentType(t *testing.T) {
 		t.Fatalf("got user=%q pass=%q", user, pass)
 	}
 }
-

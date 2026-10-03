@@ -2,6 +2,20 @@ package settings
 
 import "testing"
 
+func TestOIDCAutoCreateUsersBackwardCompatibleDefault(t *testing.T) {
+	if !(OidcConfig{}).ShouldAutoCreateUsers() {
+		t.Fatal("unset autoCreateUsers must preserve current auto-creation behavior")
+	}
+	disabled := false
+	if (OidcConfig{AutoCreateUsers: &disabled}).ShouldAutoCreateUsers() {
+		t.Fatal("explicit false must disable auto-creation")
+	}
+	enabled := true
+	if !(OidcConfig{AutoCreateUsers: &enabled}).ShouldAutoCreateUsers() {
+		t.Fatal("explicit true must enable auto-creation")
+	}
+}
+
 func TestApplyAuthCommonDefaults(t *testing.T) {
 	empty := AuthCommon{}
 	applyAuthCommonDefaults(&empty)

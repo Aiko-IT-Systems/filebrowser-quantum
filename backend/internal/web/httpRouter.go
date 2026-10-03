@@ -30,6 +30,9 @@ func configureHTTPRouter(router, api, publicRoutes, publicApi *http.ServeMux) {
 	api.HandleFunc("PATCH /users", withUser(userPatchHandler))
 	api.HandleFunc("PATCH /users/pinned-items", withUser(userPatchPinnedItemsHandler))
 	api.HandleFunc("DELETE /users", withSelfOrAdmin(userDeleteHandler))
+	api.HandleFunc("GET /users/oidc-identity", withAdmin(userOIDCIdentityHandler))
+	api.HandleFunc("PUT /users/oidc-identity", withAdmin(userOIDCIdentityHandler))
+	api.HandleFunc("DELETE /users/oidc-identity", withAdmin(userOIDCIdentityHandler))
 	publicApi.HandleFunc("GET /users", withUser(userGetHandler))
 
 	// ========================================

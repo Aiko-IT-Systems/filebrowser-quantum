@@ -1,20 +1,72 @@
 package state
 
 import (
+	"database/sql"
 	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/gtsteffaniak/filebrowser/backend/internal/errors"
-	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
-	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/quota"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/share"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/users"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/errors"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/toolaccess"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/usersidebar"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
+	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 )
+
+// OIDCIdentity is an issuer-qualified OIDC subject link. Subjects are deliberately
+// kept out of User/UserFrontend so they are only returned by the admin API.
+type OIDCIdentity struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+}
+
+func GetOIDCIdentity(userID uint64, issuer string) (OIDCIdentity, error) {
+	var identity OIDCIdentity
+	identity.Issuer = issuer
+	err := sqlDb.DB().QueryRow("SELECT subject FROM oidc_identities WHERE user_id = ? AND issuer = ?", fmt.Sprint(userID), issuer).Scan(&identity.Subject)
+	if err == sql.ErrNoRows {
+		return OIDCIdentity{}, errors.ErrNotExist
+	}
+	return identity, err
+}
+
+func GetUserIDByOIDCIdentity(issuer, subject string) (uint64, error) {
+	var id string
+	err := sqlDb.DB().QueryRow("SELECT user_id FROM oidc_identities WHERE issuer = ? AND subject = ?", issuer, subject).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, errors.ErrNotExist
+	}
+	if err != nil {
+		return 0, err
+	}
+	var parsed uint64
+	_, err = fmt.Sscan(id, &parsed)
+	return parsed, err
+}
+
+func SetOIDCIdentity(userID uint64, issuer, subject string) error {
+	tx, err := sqlDb.DB().Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM oidc_identities WHERE user_id = ?", fmt.Sprint(userID)); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO oidc_identities (issuer, subject, user_id) VALUES (?, ?, ?)", issuer, subject, fmt.Sprint(userID)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func DeleteOIDCIdentity(userID uint64) error {
+	_, err := sqlDb.DB().Exec("DELETE FROM oidc_identities WHERE user_id = ?", fmt.Sprint(userID))
+	return err
+}
 
 // User operations
 
