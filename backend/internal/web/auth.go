@@ -84,15 +84,20 @@ func ExtractToken(r *http.Request) (string, error) {
 // When groupsPresent is true, groups (including empty) are synced into access-control GroupMap.
 func getOrCreateAuthenticatedUser(username string, loginMethod users.LoginMethod, isAdmin bool, groups []string, groupsPresent bool) (*users.User, error) {
 	allowedGroups := []string{}
+	adminGroup := ""
 	switch loginMethod {
 	case users.LoginMethodJwt:
 		allowedGroups = settings.Config.Auth.Methods.JwtAuth.UserGroups
+		adminGroup = settings.Config.Auth.Methods.JwtAuth.AdminGroup
 	case users.LoginMethodLdap:
 		allowedGroups = settings.Config.Auth.Methods.LdapAuth.UserGroups
+		adminGroup = settings.Config.Auth.Methods.LdapAuth.AdminGroup
 	case users.LoginMethodOidc:
 		allowedGroups = settings.Config.Auth.Methods.OidcAuth.UserGroups
+		adminGroup = settings.Config.Auth.Methods.OidcAuth.AdminGroup
 	case users.LoginMethodProxy:
 		allowedGroups = settings.Config.Auth.Methods.ProxyAuth.UserGroups
+		adminGroup = settings.Config.Auth.Methods.ProxyAuth.AdminGroup
 	}
 	allowed := len(allowedGroups) == 0
 	for _, userGroup := range groups {
@@ -146,7 +151,7 @@ func getOrCreateAuthenticatedUser(username string, loginMethod users.LoginMethod
 		return nil, errors.ErrWrongLoginMethod
 	}
 	// Sync admin from current group membership when the auth source sent groups.
-	if groupsPresent {
+	if groupsPresent && adminGroup != "" {
 		if userValue.Permissions.Admin != isAdmin {
 			userValue.Permissions.Admin = isAdmin
 			err = state.UpdateUser(&userValue, "", "permissions")
