@@ -651,7 +651,14 @@ export default {
       this.profileLoadKey += 1;
     },
     applyProfileUserToFormUser() {
+      // Login method is edited in the account form, not the profile snapshot.
+      // Preserve the current selection while merging profile preferences, whose
+      // nested account section may still contain the original login method.
+      const loginMethod = this.user.loginMethod;
       applySectionsToFlatUser(this.user, sectionsFromFlatUser(this.profileUser));
+      if (loginMethod) {
+        this.user.loginMethod = loginMethod;
+      }
     },
     async fetchExistingUserRecord(username) {
       if (username === state.user?.username) {

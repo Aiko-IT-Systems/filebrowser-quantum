@@ -20,9 +20,6 @@ import (
 
 // Constants for TOTP (Time-based One-Time Password) configuration.
 const (
-	// IssuerName is the name of the application or service.
-	IssuerName = "FileBrowser Quantum"
-
 	// TokenValidTime defines the total duration a token is considered valid.
 	// Note: The actual validation window might be slightly longer depending on the period.
 	TokenValidTime = time.Minute * 2
@@ -52,9 +49,13 @@ var (
 )
 
 func GenerateOtpForUser(user *users.User) (string, error) {
+	issuer := strings.TrimSpace(settings.Config.Frontend.Name)
+	if issuer == "" {
+		issuer = "FileBrowser Quantum"
+	}
 	// Generate a new TOTP key using the defined constants.
 	key, err := totp.Generate(totp.GenerateOpts{
-		Issuer:      IssuerName,
+		Issuer:      issuer,
 		AccountName: user.Username,
 		Period:      TOTPPeriod,
 		SecretSize:  TOTPSecretSize,
@@ -78,8 +79,7 @@ func GenerateOtpForUser(user *users.User) (string, error) {
 	// set cache so verify can attempt to use it but not require it for user yet.
 	TotpCache.Set(user.Username, secretToStore+"||"+nonce)
 	// Use the original base32 secret in the OTP URL, not the encrypted version
-	url := fmt.Sprintf("otpauth://totp/%v?secret=%v", "FileBrowser Quantum: "+user.Username, secretText)
-	return url, nil
+	return key.URL(), nil
 }
 
 // encryptSecret uses AES-GCM to encrypt a plaintext secret.

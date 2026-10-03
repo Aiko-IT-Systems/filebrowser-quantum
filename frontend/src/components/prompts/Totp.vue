@@ -1,6 +1,10 @@
 <template>
   <div class="card-content">
     <div v-if="error !== ''" class="wrong-login card">{{ error }}</div>
+    <div class="totp-branding">
+      <img v-if="appLogo" :src="appLogo" :alt="appName" />
+      <strong>{{ appName }}</strong>
+    </div>
     <p v-if="generate">{{ $t("otp.generate") }}</p>
     <div v-if="generate" class="box__element box__center">
       <p aria-label="otp-url">{{ url }}</p>
@@ -57,6 +61,12 @@ export default {
     };
   },
   computed: {
+    appName() {
+      return globalVars.name || "FileBrowser Quantum";
+    },
+    appLogo() {
+      return globalVars.loginIcon || "";
+    },
     passkeyAvailable() {
       return globalVars.passkeyAvailable;
     },
@@ -174,6 +184,20 @@ export default {
 </script>
 
 <style scoped>
+.totp-branding {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75em;
+  margin-bottom: 1em;
+}
+
+.totp-branding img {
+  width: 2.5em;
+  height: 2.5em;
+  object-fit: contain;
+}
+
 .box {
   box-shadow: rgb(0 0 0 / 6%) 0 1px 3px, rgb(0 0 0 / 12%) 0 1px 2px;
   background: #fff;
