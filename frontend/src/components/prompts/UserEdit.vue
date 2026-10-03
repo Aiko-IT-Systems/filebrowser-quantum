@@ -1254,6 +1254,10 @@ export default {
                 loginMethod: this.user.loginMethod,
               }
             : null;
+          // The shared session can lag behind edits made directly in this form
+          // (for example, adding a source scope). Rebase it from the live form
+          // before restoring child-prompt state so save does not discard those edits.
+          this.syncSessionState();
           this.applySessionState(session);
           if (newUserCredentials) {
             this.user.username = newUserCredentials.username;
